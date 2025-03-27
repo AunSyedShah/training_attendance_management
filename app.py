@@ -2,9 +2,17 @@ import streamlit as st
 import pymongo
 import pandas as pd
 from datetime import datetime
+import os
 
-# MongoDB Connection
-client = pymongo.MongoClient("mongodb://localhost:27017/")
+# MongoDB Connection based on environment
+PRODUCTION = os.getenv("PRODUCTION", "FALSE").upper() == "TRUE"
+
+if PRODUCTION:
+    mongo_url = os.getenv("MONGODB_URL")  # Load from environment
+else:
+    mongo_url = "mongodb://localhost:27017/"
+
+client = pymongo.MongoClient(mongo_url)
 db = client["faculty_training"]
 trainings_col = db["trainings"]
 participants_col = db["participants"]

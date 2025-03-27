@@ -3,6 +3,7 @@ import pymongo
 import pandas as pd
 from datetime import datetime
 import os
+import io
 
 # MongoDB Connection based on environment
 PRODUCTION = os.getenv("PRODUCTION", "FALSE").upper() == "TRUE"
@@ -22,31 +23,64 @@ st.title("Faculty Training Management System")
 
 # Sidebar navigation
 menu = st.sidebar.radio("Navigation", [
-                        "Add Training", "Manage Participants", "Track Attendance", "View Training Status"])
+                        "Add Training", "Manage Trainings", "Manage Participants", "Track Attendance", "View Training Status"])
 
 # Function to fetch trainings
 def get_trainings():
-    return list(trainings_col.find({}, {"_id": 0, "name": 1}))
+    return list(trainings_col.find({}, {"_id": 0, "name": 1, "trainer_name": 1, "start_date": 1}))
 
 # 1. Add Training
 if menu == "Add Training":
     st.header("Add New Training")
 
     name = st.text_input("Training Name")
+    trainer_name = st.text_input("Trainer Name")  # New field for trainer name
     description = st.text_area("Description")
     start_date = st.date_input("Start Date")
 
     if st.button("Add Training"):
         training_data = {
             "name": name,
+            "trainer_name": trainer_name,  # Storing trainer name
             "description": description,
             "start_date": str(start_date),
             "created_at": datetime.now()
         }
         trainings_col.insert_one(training_data)
-        st.success(f"Training '{name}' added successfully!")
+        st.success(f"Training '{name}' added successfully with Trainer '{trainer_name}'!")
 
-# 2. Manage Participants
+# 2. Manage Trainings
+elif menu == "Manage Trainings":
+    st.header("Manage Trainings")
+    trainings = get_trainings()
+    training_names = [t["name"] for t in trainings] if trainings else []
+    
+    selected_training = st.selectbox("Select Training", training_names)
+    
+    if selected_training:
+        training = trainings_col.find_one({"name": selected_training})
+        new_name = st.text_input("Training Name", training["name"])
+        new_trainer = st.text_input("Trainer Name", training.get("trainer_name", ""))
+        new_description = st.text_area("Description", training.get("description", ""))
+        new_start_date = st.date_input("Start Date", datetime.strptime(training["start_date"], "%Y-%m-%d"))
+        
+        if st.button("Update Training"):
+            trainings_col.update_one(
+                {"name": selected_training},
+                {"$set": {
+                    "name": new_name,
+                    "trainer_name": new_trainer,
+                    "description": new_description,
+                    "start_date": str(new_start_date)
+                }}
+            )
+            st.success("Training updated successfully!")
+        
+        if st.button("Delete Training"):
+            trainings_col.delete_one({"name": selected_training})
+            st.success("Training deleted successfully!")
+
+# 3. Manage Participants
 elif menu == "Manage Participants":
     st.header("Manage Participants")
 
@@ -99,7 +133,7 @@ elif menu == "Manage Participants":
             else:
                 st.warning("No active participants in this training.")
 
-# 3. Track Attendance
+# 4. Track Attendance
 elif menu == "Track Attendance":
     st.header("Track Attendance")
 
@@ -125,18 +159,22 @@ elif menu == "Track Attendance":
             attendance_col.insert_one(attendance_data)
             st.success("Attendance recorded successfully!")
 
-# 4. View Training Status with Attendance Summary and Removed Participants
+# 5. View Training Status
 elif menu == "View Training Status":
     st.header("Training Status & Attendance Summary")
-
+    
     trainings = get_trainings()
     training_names = [t["name"] for t in trainings] if trainings else []
-
+    
     selected_training = st.selectbox("Select Training", training_names)
     start_date = st.date_input("Start Date")
     end_date = st.date_input("End Date")
-
+    
     if selected_training and start_date <= end_date:
+        training = trainings_col.find_one({"name": selected_training})
+        st.write(f"**Trainer Name:** {training.get('trainer_name', 'N/A')}")
+        st.write(f"**Start Date:** {training.get('start_date', 'N/A')}")
+        
         # Fetch all participants (active + removed)
         participants = list(participants_col.find(
             {"training_name": selected_training},
@@ -144,39 +182,37 @@ elif menu == "View Training Status":
         ))
 
         participant_names = [p["name"] for p in participants]
-        removed_participants = {p["name"]: p["date_removed"]
-                                for p in participants if p["status"] == "removed"}
+        removed_participants = {p["name"]: p["date_removed"] for p in participants if p["status"] == "removed"}
 
-        # Fetch attendance records for the selected date range
+        # Fetch attendance records
         attendance_records = list(attendance_col.find(
             {"training_name": selected_training, "date": {"$gte": str(start_date), "$lte": str(end_date)}},
             {"_id": 0, "date": 1, "present_participants": 1}
         ))
 
-        # Process attendance data
+        # Prepare attendance summary
         attendance_summary = {name: {} for name in participant_names}
         date_list = pd.date_range(start=start_date, end=end_date).strftime('%Y-%m-%d').tolist()
 
         for record in attendance_records:
             record_date = record["date"]
             for name in participant_names:
-                # If participant was removed, only show attendance before removal date
                 if name in removed_participants and record_date > str(removed_participants[name].date()):
                     attendance_summary[name][record_date] = "-"
                 else:
                     attendance_summary[name][record_date] = "P" if name in record["present_participants"] else "A"
 
-        # Convert to DataFrame for display
-        df_data = {"Faculty Name": participant_names}
+        # Convert to DataFrame
+        df_data = {"Participant Name": participant_names}
         for date in date_list:
             df_data[date] = [attendance_summary[name].get(date, "-") for name in participant_names]
 
         attendance_df = pd.DataFrame(df_data)
 
         st.subheader("Attendance Summary")
-        st.write(attendance_df)
+        st.dataframe(attendance_df)
 
-        # Show removed participants with removal reason
+        # Show removed participants
         removed_participants_list = list(participants_col.find(
             {"training_name": selected_training, "status": "removed"},
             {"_id": 0, "name": 1, "date_removed": 1, "removal_reason": 1}
@@ -185,11 +221,23 @@ elif menu == "View Training Status":
         if removed_participants_list:
             st.subheader("Removed Participants")
             removed_df = pd.DataFrame(removed_participants_list)
-            removed_df.rename(columns={"name": "Faculty Name", "date_removed": "Date Removed", "removal_reason": "Reason"}, inplace=True)
-            st.write(removed_df)
+            removed_df.rename(columns={"name": "Participant Name", "date_removed": "Removal Date", "removal_reason": "Reason"}, inplace=True)
+            st.dataframe(removed_df)
         else:
             st.info("No participants were removed from this training.")
+
+        # ✅ Export to Excel
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            attendance_df.to_excel(writer, sheet_name="Attendance", index=False)
+            if removed_participants_list:
+                removed_df.to_excel(writer, sheet_name="Removed Participants", index=False)
+        
+        st.download_button(
+            label="📥 Download Training Status (Excel)",
+            data=output.getvalue(),
+            file_name=f"{selected_training}_training_status.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
     else:
         st.warning("Please select a valid training and date range.")
-
-

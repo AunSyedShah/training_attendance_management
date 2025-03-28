@@ -1,272 +1,304 @@
 import streamlit as st
-import pymongo
-import bcrypt
-import pandas as pd
+from pymongo import MongoClient
 from datetime import datetime
+import pandas as pd
 import os
 
+# Read MongoDB URL from environment variable
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017/")
+
 # MongoDB Connection
-PRODUCTION = os.getenv("PRODUCTION", "FALSE").upper() == "TRUE"
-mongo_url = os.getenv("MONGODB_URL") if PRODUCTION else "mongodb://localhost:27017/"
-client = pymongo.MongoClient(mongo_url)
-db = client["faculty_training"]
-users_col = db["users"]
-trainings_col = db["trainings"]
-participants_col = db["participants"]
-attendance_col = db["attendance"]
+client = MongoClient(MONGODB_URL)
+db = client["training_db"]
+trainings_collection = db["trainings"]
+participants_collection = db["participants"]
+attendance_collection = db["attendance"]
 
-# Session state for authentication
-if "authenticated" not in st.session_state:
-    st.session_state["authenticated"] = False
+# Streamlit App
+st.title("Training Attendance Management")
 
-# Function to hash passwords
-def hash_password(password):
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt())
+# Sidebar Navigation
+menu = [
+    "Manage Trainings",
+    "Manage Participants",
+    "Assign Participants to Training",
+    "Track Attendance",
+    "Training Status"
+]
+choice = st.sidebar.selectbox("Menu", menu)
 
-# Function to check passwords
-def check_password(password, hashed):
-    return bcrypt.checkpw(password.encode(), hashed)
+# --- TRAINING MANAGEMENT ---
+if choice == "Manage Trainings":
+    st.subheader("Training Management")
 
-# Function to authenticate admin
-def authenticate(username, password):
-    user = users_col.find_one({"username": username})
-    if user and check_password(password, user["password"]):
-        st.session_state["authenticated"] = True
-        return True
-    return False
+    action = st.radio("Select Action", ["Create", "View", "Edit", "Delete"])
 
-# Function to create an admin user (Run once)
-def create_admin():
-    if not users_col.find_one({"username": "admin"}):
-        hashed_pw = hash_password("admin123")  # Default password
-        users_col.insert_one({"username": "admin", "password": hashed_pw})
-        st.success("Admin created! (Username: admin, Password: admin123)")
-    else:
-        st.warning("Admin already exists!")
-
-# Login page
-def login():
-    st.title("🔒 Admin Login")
-
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    login_button = st.button("Login")
-
-    if login_button:
-        if authenticate(username, password):
-            st.success("✅ Login Successful! Redirecting...")
-            st.rerun()
-        else:
-            st.error("❌ Invalid Username or Password!")
-
-# Logout function
-def logout():
-    st.session_state["authenticated"] = False
-    st.rerun()
-
-# Function to fetch trainings
-def get_trainings():
-    return list(trainings_col.find({}, {"_id": 0, "name": 1, "trainer_name": 1, "start_date": 1}))
-
-# Function to export training status to Excel
-def export_to_excel(dataframe, filename="training_status.xlsx"):
-    dataframe.to_excel(filename, index=False)
-    with open(filename, "rb") as file:
-        st.download_button(label="📥 Download Excel", data=file, file_name=filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# Main application
-if not st.session_state["authenticated"]:
-    login()
-else:
-    st.sidebar.button("🚪 Logout", on_click=logout)
-    
-    st.title("🏫 Faculty Training Management System")
-    
-    menu = st.sidebar.radio("Navigation", [
-        "Add Training", "Manage Trainings", "Manage Participants", "Track Attendance", "View Training Status"
-    ])
-    
-    # 1. Add Training
-    if menu == "Add Training":
-        st.header("Add New Training")
-
-        name = st.text_input("Training Name")
+    if action == "Create":
+        st.subheader("Start New Training")
+        training_name = st.text_input("Training Name")
         trainer_name = st.text_input("Trainer Name")
-        description = st.text_area("Description")
-        start_date = st.date_input("Start Date")
+        start_date = st.date_input("Start Date", datetime.today())
+        training_days = st.multiselect(
+            "Select Training Days",
+            ["Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday"]
+        )
 
-        if st.button("Add Training"):
-            training_data = {
-                "name": name,
-                "trainer_name": trainer_name,
-                "description": description,
-                "start_date": str(start_date),
-                "created_at": datetime.now()
-            }
-            trainings_col.insert_one(training_data)
-            st.success(f"Training '{name}' added successfully!")
+        if st.button("Save Training"):
+            if training_name and trainer_name and training_days:
+                training = {
+                    "training_name": training_name,
+                    "trainer_name": trainer_name,
+                    "start_date": start_date.strftime("%Y-%m-%d"),
+                    "training_days": training_days,
+                    "participants": []  # Empty list for participants
+                }
+                trainings_collection.insert_one(training)
+                st.success("Training Added Successfully")
+            else:
+                st.warning("Please fill all fields")
 
-    # 2. Manage Trainings (Update/Delete)
-    elif menu == "Manage Trainings":
-        st.header("Manage Trainings")
-        trainings = get_trainings()
-        training_names = [t["name"] for t in trainings] if trainings else []
-        
+    elif action == "View":
+        st.subheader("List of Trainings")
+        trainings = list(trainings_collection.find())
+
+        if not trainings:
+            st.write("No trainings found.")
+
+        for training in trainings:
+            st.write(
+                f"**Training Name:** {training.get('training_name', 'N/A')}")
+            st.write(f"**Trainer:** {training.get('trainer_name', 'N/A')}")
+            st.write(f"**Start Date:** {training.get('start_date', 'N/A')}")
+            st.write(
+                f"**Days:** {', '.join(training.get('training_days', []))}")
+            st.write(
+                f"**Participants:** {', '.join(training.get('participants', []))}")
+            st.write("---")
+
+    elif action == "Edit":
+        st.subheader("Edit Training")
+        training_list = list(trainings_collection.find())
+        training_names = [t['training_name'] for t in training_list]
+
         selected_training = st.selectbox("Select Training", training_names)
-        
+
         if selected_training:
-            training = trainings_col.find_one({"name": selected_training})
-            new_name = st.text_input("Training Name", training["name"])
-            new_trainer = st.text_input("Trainer Name", training.get("trainer_name", ""))
-            new_description = st.text_area("Description", training.get("description", ""))
-            new_start_date = st.date_input("Start Date", datetime.strptime(training["start_date"], "%Y-%m-%d"))
-            
+            training_data = trainings_collection.find_one(
+                {"training_name": selected_training})
+
+            new_training_name = st.text_input(
+                "Training Name", training_data["training_name"])
+            new_trainer_name = st.text_input(
+                "Trainer Name", training_data["trainer_name"])
+            new_start_date = st.date_input("Start Date", datetime.strptime(
+                training_data["start_date"], "%Y-%m-%d"))
+            new_training_days = st.multiselect(
+                "Training Days",
+                ["Monday", "Tuesday", "Wednesday", "Thursday",
+                    "Friday", "Saturday", "Sunday"],
+                default=training_data["training_days"]
+            )
+
             if st.button("Update Training"):
-                trainings_col.update_one(
-                    {"name": selected_training},
+                trainings_collection.update_one(
+                    {"training_name": selected_training},
                     {"$set": {
-                        "name": new_name,
-                        "trainer_name": new_trainer,
-                        "description": new_description,
-                        "start_date": str(new_start_date)
+                        "training_name": new_training_name,
+                        "trainer_name": new_trainer_name,
+                        "start_date": new_start_date.strftime("%Y-%m-%d"),
+                        "training_days": new_training_days
                     }}
                 )
-                st.success("Training updated successfully!")
-            
-            if st.button("Delete Training"):
-                trainings_col.delete_one({"name": selected_training})
-                st.success("Training deleted successfully!")
+                st.success("Training Updated Successfully")
 
-    # 2. Manage Participants (Add/Remove)
-    elif menu == "Manage Participants":
-        st.header("Manage Participants")
-
-        trainings = get_trainings()
-        training_names = [t["name"] for t in trainings] if trainings else []
+    elif action == "Delete":
+        st.subheader("Delete Training")
+        training_list = list(trainings_collection.find())
+        training_names = [t['training_name'] for t in training_list]
 
         selected_training = st.selectbox("Select Training", training_names)
 
-        if selected_training:
-            st.subheader(f"Participants for {selected_training}")
+        if st.button("Delete Training"):
+            trainings_collection.delete_one(
+                {"training_name": selected_training})
+            st.warning("Training Deleted")
 
-            # Add Participant
-            new_participant = st.text_input("New Participant Name")
-            if st.button("Add Participant"):
-                if new_participant:
-                    participants_col.insert_one({"training_name": selected_training, "name": new_participant, "status": "active"})
-                    st.success(f"Added {new_participant} to {selected_training}")
-                    st.rerun()
-                else:
-                    st.error("Please enter a participant name!")
+# --- PARTICIPANT MANAGEMENT ---
+elif choice == "Manage Participants":
+    st.subheader("Participant Management")
 
-            # Fetch and display participants
-            participants = list(participants_col.find({"training_name": selected_training}, {"_id": 0, "name": 1, "status": 1}))
-            
-            if participants:
-                participant_names = [p["name"] for p in participants]
-                selected_participant = st.selectbox("Select Participant to Remove", participant_names)
-                removal_reason = st.text_area("Reason for Removal")
+    action = st.radio("Select Action", ["Add", "View", "Edit", "Remove"])
 
-                if st.button("Remove Participant"):
-                    if selected_participant:
-                        participants_col.update_one(
-                            {"training_name": selected_training, "name": selected_participant},
-                            {"$set": {"status": "removed", "removal_reason": removal_reason}}
-                        )
-                        st.success(f"Removed {selected_participant} from {selected_training}")
-                        st.rerun()
-                    else:
-                        st.error("Please select a participant to remove!")
+    if action == "Add":
+        st.subheader("Add Participant")
+        participant_name = st.text_input("Participant Name")
+        email = st.text_input("Email")
+        phone = st.text_input("Phone Number")
+
+        if st.button("Save Participant"):
+            if participant_name and email and phone:
+                participant = {
+                    "participant_name": participant_name,
+                    "email": email,
+                    "phone": phone
+                }
+                participants_collection.insert_one(participant)
+                st.success("Participant Added Successfully")
             else:
-                st.warning("No participants found for this training.")
+                st.warning("Please fill all fields")
 
-    # 3. Track Attendance
-    elif menu == "Track Attendance":
-        st.header("Track Attendance")
+    elif action == "View":
+        st.subheader("List of Participants")
+        participants = list(participants_collection.find())
 
-        trainings = get_trainings()
-        training_names = [t["name"] for t in trainings] if trainings else []
+        if not participants:
+            st.write("No participants found.")
 
-        selected_training = st.selectbox("Select Training", training_names)
-        attendance_date = st.date_input("Select Date")
+        for participant in participants:
+            st.write(f"**Name:** {participant.get('participant_name', 'N/A')}")
+            st.write(f"**Email:** {participant.get('email', 'N/A')}")
+            st.write(f"**Phone:** {participant.get('phone', 'N/A')}")
+            st.write("---")
 
-        if selected_training:
-            participants = list(participants_col.find({"training_name": selected_training, "status": "active"}, {"_id": 0, "name": 1}))
-            participant_names = [p["name"] for p in participants]
+    elif action == "Edit":
+        st.subheader("Edit Participant")
+        participant_list = list(participants_collection.find())
+        participant_names = [p['participant_name'] for p in participant_list]
 
-            attendance_marked = st.multiselect("Mark Attendance", participant_names)
+        selected_participant = st.selectbox(
+            "Select Participant", participant_names)
+
+        if selected_participant:
+            participant_data = participants_collection.find_one(
+                {"participant_name": selected_participant})
+
+            new_name = st.text_input(
+                "Participant Name", participant_data["participant_name"])
+            new_email = st.text_input("Email", participant_data["email"])
+            new_phone = st.text_input(
+                "Phone Number", participant_data["phone"])
+
+            if st.button("Update Participant"):
+                participants_collection.update_one(
+                    {"participant_name": selected_participant},
+                    {"$set": {
+                        "participant_name": new_name,
+                        "email": new_email,
+                        "phone": new_phone
+                    }}
+                )
+                st.success("Participant Updated Successfully")
+
+    elif action == "Remove":
+        st.subheader("Remove Participant")
+        participant_list = list(participants_collection.find())
+        participant_names = [p['participant_name'] for p in participant_list]
+
+        selected_participant = st.selectbox(
+            "Select Participant", participant_names)
+
+        if st.button("Remove Participant"):
+            participants_collection.delete_one(
+                {"participant_name": selected_participant})
+            st.warning("Participant Removed")
+
+# --- ASSIGN PARTICIPANTS TO TRAININGS ---
+elif choice == "Assign Participants to Training":
+    st.subheader("Assign Participants")
+
+    training_list = list(trainings_collection.find())
+    training_names = [t['training_name'] for t in training_list]
+
+    participant_list = list(participants_collection.find())
+    participant_names = [p['participant_name'] for p in participant_list]
+
+    selected_training = st.selectbox("Select Training", training_names)
+    selected_participants = st.multiselect(
+        "Select Participants", participant_names)
+
+    if st.button("Assign"):
+        trainings_collection.update_one(
+            {"training_name": selected_training},
+            {"$addToSet": {"participants": {"$each": selected_participants}}}
+        )
+        st.success("Participants Assigned Successfully")
+
+
+# --- TRACK ATTENDANCE ---
+if choice == "Track Attendance":
+    st.subheader("Mark Attendance")
+
+    training_list = list(trainings_collection.find())
+    training_names = [t['training_name'] for t in training_list]
+
+    selected_training = st.selectbox("Select Training", training_names)
+
+    if selected_training:
+        training_data = trainings_collection.find_one(
+            {"training_name": selected_training})
+        participant_names = training_data.get("participants", [])
+
+        selected_date = st.date_input("Select Date", datetime.today())
+
+        if participant_names:
+            attendance_status = {}
+            for participant in participant_names:
+                attendance_status[participant] = st.checkbox(
+                    f"Present: {participant}", value=True)
 
             if st.button("Save Attendance"):
-                attendance_data = {
+                attendance_record = {
                     "training_name": selected_training,
-                    "date": str(attendance_date),
-                    "present_participants": attendance_marked
+                    "date": selected_date.strftime("%Y-%m-%d"),
+                    "attendance": attendance_status
                 }
-                attendance_col.insert_one(attendance_data)
-                st.success("Attendance recorded successfully!")
+                attendance_collection.insert_one(attendance_record)
+                st.success("Attendance Saved Successfully")
+        else:
+            st.warning("No participants assigned to this training.")
 
-    # 4. View Training Status
-    elif menu == "View Training Status":
-        st.header("Training Status & Attendance Summary")
+# --- TRAINING STATUS PAGE ---
+if choice == "Training Status":
+    st.subheader("Training Status Overview")
 
-        trainings = get_trainings()
-        training_names = [t["name"] for t in trainings] if trainings else []
+    training_list = list(trainings_collection.find())
+    training_names = [t['training_name'] for t in training_list]
 
+    if training_names:
         selected_training = st.selectbox("Select Training", training_names)
-        start_date = st.date_input("Start Date")
-        end_date = st.date_input("End Date")
 
-        if selected_training and start_date <= end_date:
-            training = trainings_col.find_one({"name": selected_training})
-            st.write(f"**Trainer Name:** {training.get('trainer_name', 'N/A')}")
-            st.write(f"**Start Date:** {training.get('start_date', 'N/A')}")
+        if selected_training:
+            training_data = trainings_collection.find_one({"training_name": selected_training})
+            participant_names = training_data.get("participants", [])
 
-            # Fetch attendance records
-            attendance_records = list(attendance_col.find(
-                {"training_name": selected_training, "date": {"$gte": str(start_date), "$lte": str(end_date)}},
-                {"_id": 0, "date": 1, "present_participants": 1}
-            ))
+            st.write(f"**Training Name:** {training_data.get('training_name', 'N/A')}")
+            st.write(f"**Trainer:** {training_data.get('trainer_name', 'N/A')}")
+            st.write(f"**Days:** {', '.join(training_data.get('training_days', []))}")
 
-            # Fetch all participants (active & removed)
-            participants = list(participants_col.find(
-                {"training_name": selected_training},
-                {"_id": 0, "name": 1, "status": 1, "date_removed": 1, "removal_reason": 1}
-            ))
+            # Fetch attendance records for the selected training
+            attendance_records = list(attendance_collection.find({"training_name": selected_training}))
 
-            # Separate active and removed participants
-            active_participants = [p["name"] for p in participants if p.get("status") == "active"]
-            removed_participants = {p["name"]: p for p in participants if p.get("status") == "removed"}
+            if attendance_records:
+                # Extract unique dates
+                dates = sorted(set(record["date"] for record in attendance_records))
 
-            # Create attendance dataframe
-            df_data = {"Participant Name": []}
-            date_list = pd.date_range(start=start_date, end=end_date).strftime('%Y-%m-%d').tolist()
+                # Create a dictionary to store attendance in table format
+                attendance_data = {participant: {date: "A" for date in dates} for participant in participant_names}
 
-            for name in active_participants + list(removed_participants.keys()):
-                df_data["Participant Name"].append(name)
-                
-                # Get removal date (if participant was removed)
-                removal_date = removed_participants.get(name, {}).get("date_removed")
-                removal_date = removal_date.strftime('%Y-%m-%d') if removal_date else None
+                for record in attendance_records:
+                    date = record["date"]
+                    for participant, status in record["attendance"].items():
+                        attendance_data[participant][date] = "P" if status else "A"
 
-                for date in date_list:
-                    if removal_date and date > removal_date:
-                        df_data.setdefault(date, []).append("X")  # Mark as removed
-                    else:
-                        df_data.setdefault(date, []).append("P" if any(name in record["present_participants"] for record in attendance_records if record["date"] == date) else "A")
+                # Convert dictionary to DataFrame
+                attendance_df = pd.DataFrame.from_dict(attendance_data, orient="index", columns=dates)
+                attendance_df.index.name = "Participant Name"
 
-            attendance_df = pd.DataFrame(df_data)
-            st.subheader("📋 Attendance Record")
-            st.dataframe(attendance_df)
-
-            # Display removed participants
-            if removed_participants:
-                st.subheader("🚫 Removed Participants")
-                removed_df = pd.DataFrame(removed_participants.values())
-                removed_df.rename(columns={"name": "Participant Name", "removal_reason": "Reason", "date_removed": "Removal Date"}, inplace=True)
-                st.dataframe(removed_df)
-
-            # Export to Excel
-            export_to_excel(attendance_df)
-
-# Uncomment to create admin user (Run once)
-# create_admin()
+                # Display the table
+                st.write("### Attendance Records")
+                st.dataframe(attendance_df)
+            else:
+                st.write("No attendance records available.")
+    else:
+        st.write("No trainings available.")

@@ -313,34 +313,46 @@ else:
     if choice == "Track Attendance":
         st.subheader("Mark Attendance")
 
+        # Fetch the list of trainings and participants
         training_list = list(trainings_collection.find())
         training_names = [t['training_name'] for t in training_list]
 
         selected_training = st.selectbox("Select Training", training_names)
 
         if selected_training:
-            training_data = trainings_collection.find_one(
-                {"training_name": selected_training})
+            # Fetch training data and participants for the selected training
+            training_data = trainings_collection.find_one({"training_name": selected_training})
             participant_names = training_data.get("participants", [])
 
+            # Select the date for attendance marking
             selected_date = st.date_input("Select Date", datetime.today())
+
+            # Input for the topic of the day
+            topic_of_the_day = st.text_input("Topic for the Day")
 
             if participant_names:
                 attendance_status = {}
+                # Record the attendance status for each participant
                 for participant in participant_names:
-                    attendance_status[participant] = st.checkbox(
-                        f"Present: {participant}", value=True)
+                    attendance_status[participant] = st.checkbox(f"Present: {participant}", value=True)
 
                 if st.button("Save Attendance"):
-                    attendance_record = {
-                        "training_name": selected_training,
-                        "date": selected_date.strftime("%Y-%m-%d"),
-                        "attendance": attendance_status
-                    }
-                    attendance_collection.insert_one(attendance_record)
-                    st.success("Attendance Saved Successfully")
+                    if topic_of_the_day:  # Ensure that topic is provided
+                        # Create attendance record to store in the database
+                        attendance_record = {
+                            "training_name": selected_training,
+                            "date": selected_date.strftime("%Y-%m-%d"),
+                            "topic": topic_of_the_day,
+                            "attendance": attendance_status
+                        }
+                        # Insert the record into the attendance collection
+                        attendance_collection.insert_one(attendance_record)
+                        st.success("Attendance and Topic Saved Successfully")
+                    else:
+                        st.warning("Please provide a topic for the day.")
             else:
                 st.warning("No participants assigned to this training.")
+
 
     # --- TRAINING STATUS PAGE ---
     if choice == "Training Status":

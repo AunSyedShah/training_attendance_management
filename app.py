@@ -15,6 +15,8 @@ trainings_collection = db["trainings"]
 participants_collection = db["participants"]
 attendance_collection = db["attendance"]
 
+st.set_page_config(page_title="Training Management System", layout="wide")
+
 # Initialize session state for authentication
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False

@@ -381,27 +381,52 @@ else:
                     {"training_name": selected_training}))
 
                 if attendance_records:
-                    # Extract unique dates
-                    dates = sorted(set(record["date"]
-                                   for record in attendance_records))
+                    # Map each date to its topic
+                    date_topic_map = {}
+                    for record in attendance_records:
+                        date = record["date"]
+                        topic = record.get("topic", "")
+                        date_topic_map[date] = topic
 
-                    # Create a dictionary to store attendance in table format
-                    attendance_data = {participant: {
-                        date: "A" for date in dates} for participant in participant_names}
+                    # Sort dates
+                    dates = sorted(date_topic_map.keys())
+
+                    # Create attendance matrix with raw dates as keys
+                    attendance_data = {
+                        participant: {date: "A" for date in dates} for participant in participant_names
+                    }
 
                     for record in attendance_records:
                         date = record["date"]
                         for participant, status in record["attendance"].items():
                             attendance_data[participant][date] = "P" if status else "A"
 
-                    # Convert dictionary to DataFrame
+                    # Create DataFrame using raw date keys first
                     attendance_df = pd.DataFrame.from_dict(
-                        attendance_data, orient="index", columns=dates)
-                    attendance_df.index.name = "Participant Name"
+                        attendance_data, orient="index"
+                    )
+                    attendance_df = attendance_df[dates]  # Ensure column order
 
-                    # Display the table
+                    # Rename columns to include topics
+                    columns_with_topics = {
+                        date: f"{date}\n({date_topic_map[date]})" if date_topic_map[date] else date
+                        for date in dates
+                    }
+                    attendance_df.rename(columns=columns_with_topics, inplace=True)
+
+                    attendance_df.index.name = "Participant Name"
+                    # Function to highlight absentees
+                    def highlight_absentees(val):
+                        if val == "A":
+                            return 'background-color: #ffcccc; color: red; font-weight: bold;'
+                        return ''
+
+                    # Apply the style
+                    styled_df = attendance_df.style.applymap(highlight_absentees)
+
+                    # Display the styled DataFrame
                     st.write("### Attendance Records")
-                    st.dataframe(attendance_df)
+                    st.dataframe(styled_df, use_container_width=True)
                 else:
                     st.write("No attendance records available.")
         else:

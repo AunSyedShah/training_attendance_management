@@ -57,7 +57,7 @@ else:
     menu = [
         "Manage Trainings",
         "Manage Participants",
-        "Assign Participants to Training",
+        "Assign/Remove Participants to Training",
         "Track Attendance",
         "Training Status"
     ]
@@ -289,7 +289,7 @@ else:
 
 
     # --- ASSIGN PARTICIPANTS TO TRAININGS ---
-    elif choice == "Assign Participants to Training":
+    elif choice == "Assign/Remove Participants to Training":
         st.subheader("Assign Participants")
 
         training_list = list(trainings_collection.find())
@@ -308,6 +308,55 @@ else:
                 {"$addToSet": {"participants": {"$each": selected_participants}}}
             )
             st.success("Participants Assigned Successfully")
+        
+        st.markdown("---")
+        st.subheader("Remove Participants from Training")
+
+        participants_in_training = trainings_collection.find_one(
+            {"training_name": selected_training}
+        ).get("participants", [])
+
+        participants_to_remove = st.multiselect("Select Participants to Remove", participants_in_training)
+        removal_reason = st.text_input("Reason for Removal")
+
+        if st.button("Remove Selected Participants"):
+            if participants_to_remove and removal_reason:
+                # Remove from training
+                trainings_collection.update_one(
+                    {"training_name": selected_training},
+                    {"$pull": {"participants": {"$in": participants_to_remove}}}
+                )
+
+                # Record the removals with reason and timestamp
+                removal_records = [{
+                    "training_name": selected_training,
+                    "participant_name": name,
+                    "reason": removal_reason,
+                    "removed_on": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                } for name in participants_to_remove]
+
+                db["removals"].insert_many(removal_records)
+
+                st.success("Participants removed and recorded successfully.")
+            elif not removal_reason:
+                st.warning("Please enter a reason for removal.")
+            else:
+                st.warning("Please select participants to remove.")
+        
+        st.markdown("---")
+        st.subheader("Past Removals")
+
+        removal_logs = list(db["removals"].find({"training_name": selected_training}))
+
+        if removal_logs:
+            removal_df = pd.DataFrame(removal_logs)
+            removal_df.drop(columns=["_id"], inplace=True, errors="ignore")
+            st.dataframe(removal_df, use_container_width=True)
+        else:
+            st.write("No removals recorded for this training.")
+
+
+
 
     # --- TRACK ATTENDANCE ---
     if choice == "Track Attendance":
@@ -322,7 +371,18 @@ else:
         if selected_training:
             # Fetch training data and participants for the selected training
             training_data = trainings_collection.find_one({"training_name": selected_training})
+            # Get currently assigned participants
             participant_names = training_data.get("participants", [])
+
+            # Get names of previously removed participants
+            removed_participants = db["removals"].find(
+                {"training_name": selected_training}, {"participant_name": 1}
+            )
+            removed_names = {entry["participant_name"] for entry in removed_participants}
+
+            # Filter out removed ones
+            participant_names = [p for p in participant_names if p not in removed_names]
+
 
             # Select the date for attendance marking
             selected_date = st.date_input("Select Date", datetime.today())
